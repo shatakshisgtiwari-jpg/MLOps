@@ -83,66 +83,6 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Add source archive references
-        run: |
-          python3 - <<'PY'
-          import json
-          import urllib.error
-          import urllib.parse
-          import urllib.request
-          from pathlib import Path
-
-          source_comment = "source archive (download location)"
-
-          def purl_parts(purl):
-              if not isinstance(purl, str) or not purl.startswith("pkg:"):
-                  return None, None, None
-              try:
-                  package_type, remainder = purl[4:].split("/", 1)
-                  name, version = remainder.split("?", 1)[0].rsplit("@", 1)
-                  return package_type, urllib.parse.unquote(name), urllib.parse.unquote(version)
-              except ValueError:
-                  return None, None, None
-
-          def get_json(url):
-              request = urllib.request.Request(url, headers={"User-Agent": "sign-language-sca/1.0"})
-              with urllib.request.urlopen(request, timeout=30) as response:
-                  return json.load(response)
-
-          def source_url(component):
-              package_type, name, version = purl_parts(component.get("purl"))
-              if package_type == "pypi":
-                  metadata = get_json(
-                      f"https://pypi.org/pypi/{urllib.parse.quote(name)}/{urllib.parse.quote(version)}/json"
-                  )
-                  files = metadata.get("urls", [])
-                  selected = next((item for item in files if item.get("packagetype") == "sdist"), None)
-                  selected = selected or next((item for item in files if item.get("packagetype") == "bdist_wheel"), None)
-                  return selected.get("url") if selected else None
-              if package_type == "npm":
-                  archive_name = name.rsplit("/", 1)[-1]
-                  return f"https://registry.npmjs.org/{urllib.parse.quote(name, safe='@/')}/-/{archive_name}-{urllib.parse.quote(version)}.tgz"
-              if package_type == "maven":
-                  namespace, artifact = name.rsplit("/", 1)
-                  return f"https://repo1.maven.org/maven2/{namespace.replace('.', '/')}/{artifact}/{version}/{artifact}-{version}-sources.jar"
-              return None
-
-          path = Path("sbom.json")
-          sbom = json.loads(path.read_text(encoding="utf-8"))
-          failures = []
-          for component in sbom.get("components", []):
-              url = source_url(component)
-              if not url:
-                  failures.append(component.get("purl") or component.get("name", "unknown"))
-                  continue
-              references = [reference for reference in component.get("externalReferences", []) if reference.get("comment") != source_comment]
-              references.append({"type": "distribution", "comment": source_comment, "url": url})
-              component["externalReferences"] = references
-          if failures:
-              raise SystemExit("Unable to resolve source archives for:\n  - " + "\n  - ".join(failures))
-          path.write_text(json.dumps(sbom, indent=2) + "\n", encoding="utf-8")
-          PY
-
       - name: Checkout CapyCLI fork
         uses: actions/checkout@v4
         with:
@@ -267,40 +207,14 @@ jobs:
         id: scan-needed
         run: |
           test "$(jq '.components | length' filtered-sbom.json)" -gt 0 && echo "required=true" >> "$GITHUB_OUTPUT" || echo "required=false" >> "$GITHUB_OUTPUT"
-          echo '[]' > source-manifest.json
 
       - name: Verify runner prerequisites
         if: steps.scan-needed.outputs.required == 'true'
         run: |
           set -euo pipefail
-          for command_name in jq curl python3 docker; do command -v "$command_name" >/dev/null; done
+          for command_name in jq docker; do command -v "$command_name" >/dev/null; done
           docker info >/dev/null
           docker image inspect fossology/fossology:scanner >/dev/null 2>&1 || docker pull fossology/fossology:scanner
-
-      - name: Download source archives
-        if: steps.scan-needed.outputs.required == 'true'
-        run: |
-          python3 - <<'PY'
-          import json
-          import shutil
-          import subprocess
-          from pathlib import Path
-          from urllib.parse import unquote, urlparse
-
-          sbom = json.loads(Path("filtered-sbom.json").read_text(encoding="utf-8"))
-          source_dir = Path("sources")
-          source_dir.mkdir()
-          manifest = []
-          for component in sbom["components"]:
-              release_id = next(item["value"] for item in component["properties"] if item["name"] == "siemens:sw360Id")
-              url = next(reference["url"] for reference in component["externalReferences"] if reference.get("comment") == "source archive (download location)")
-              filename = Path(unquote(urlparse(url).path)).name
-              if not filename: raise SystemExit(f"No source filename for {component['name']}")
-              archive = source_dir / filename
-              subprocess.run(["curl", "--fail", "--location", "--retry", "3", url, "--output", str(archive)], check=True)
-              manifest.append({"name": component["name"], "version": component["version"], "release_id": release_id, "source_filename": filename})
-          Path("source-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-          PY
 
       - name: Run FOSSology analysis
         if: steps.scan-needed.outputs.required == 'true'
@@ -327,8 +241,6 @@ jobs:
           path: |
             results/
             ${{ env.REPORT_DIR }}/
-            ${{ env.SOURCE_DIR }}/
-            source-manifest.json
           if-no-files-found: warn
           retention-days: 7
 
@@ -372,7 +284,7 @@ jobs:
         run: |
           count=$(jq '.components | length' filtered-sbom.json)
           if [ "$count" -gt 0 ]; then
-            python -m capycli bom createreleases -i filtered-sbom.json -o processed-sbom.json -url "${{ vars.SW360_URL }}" -t "${{ secrets.SW360_TOKEN }}" -source "${{ env.SOURCE_DIR }}" -X -v
+            python -m capycli bom createreleases -i filtered-sbom.json -o processed-sbom.json -url "${{ vars.SW360_URL }}" -t "${{ secrets.SW360_TOKEN }}" --download -X -v
           else
             cp filtered-sbom.json processed-sbom.json
           fi
