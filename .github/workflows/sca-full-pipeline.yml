@@ -108,7 +108,7 @@ jobs:
 
       - name: Create or update SW360 project
         run: |
-          python -m capycli project create -i created-sbom.json -url "${{ vars.SW360_URL }}" -t "${{ secrets.SW360_TOKEN }}" -name "${{ env.PROJECT_NAME }}" -version "${{ env.PROJECT_VERSION }}" -v
+          python -m capycli project create -i created-sbom.json -url "${{ vars.SW360_URL }}" -t "${{ secrets.SW360_TOKEN }}" -name "${{ env.PROJECT_NAME }}" -version "${{ env.PROJECT_VERSION }}" -source .sw360/project-info.json -v
           python -m capycli project find -name "${{ env.PROJECT_NAME }}" -version "${{ env.PROJECT_VERSION }}" -url "${{ vars.SW360_URL }}" -t "${{ secrets.SW360_TOKEN }}" --id-only > project-id.txt
           test -s project-id.txt
 
