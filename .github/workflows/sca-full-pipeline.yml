@@ -261,28 +261,50 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      - name: Remove scanner workspace
+        if: always()
+        run: |
+          set -euo pipefail
+          for path in pkg_downloads results "${{ env.REPORT_DIR }}"; do
+            if [ -e "$GITHUB_WORKSPACE/$path" ]; then
+              docker run --rm --user 0:0 \
+                --entrypoint /bin/sh \
+                -v "$GITHUB_WORKSPACE:/workspace" \
+                fossology/fossology:scanner \
+                -c 'rm -rf -- "/workspace/$1"' sh "$path"
+            fi
+          done
+
   upload-to-sw360:
     name: Upload to SW360
     runs-on: [self-hosted, linux]
     needs: scan-fossology
     timeout-minutes: 120
     steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+
       - uses: actions/download-artifact@v4
         if: needs.scan-fossology.outputs.scan_required == 'true'
         with:
           name: scan-artifacts
+          path: scan-output
 
       - uses: actions/download-artifact@v4
         with:
           name: enriched-sbom
+          path: enriched-input
 
       - uses: actions/download-artifact@v4
         with:
           name: filtered-sbom
+          path: filtered-input
 
       - uses: actions/download-artifact@v4
         with:
           name: project-id
+          path: project-input
 
       - uses: actions/checkout@v4
         with:
@@ -297,6 +319,16 @@ jobs:
       - name: Install CapyCLI
         run: pip install . --force-reinstall
         working-directory: ${{ env.CAPYCLI_DIR }}
+
+      - name: Restore pipeline artifacts
+        run: |
+          cp enriched-input/enriched-sbom.json enriched-sbom.json
+          cp filtered-input/filtered-sbom.json filtered-sbom.json
+          cp project-input/project-id.txt project-id.txt
+          if [ "${{ needs.scan-fossology.outputs.scan_required }}" = "true" ]; then
+            cp -r scan-output/results .
+            cp -r "scan-output/${{ env.REPORT_DIR }}" .
+          fi
 
       - name: Create releases and attach source files
         run: |
