@@ -27,6 +27,19 @@ jobs:
     name: Generate SBOM
     runs-on: [self-hosted, linux]
     steps:
+      - name: Remove stale scanner artifacts
+        run: |
+          set -euo pipefail
+          for path in pkg_downloads results "${{ env.REPORT_DIR }}"; do
+            if [ -e "$GITHUB_WORKSPACE/$path" ]; then
+              docker run --rm --user 0:0 \
+                --entrypoint /bin/sh \
+                -v "$GITHUB_WORKSPACE:/workspace" \
+                fossology/fossology:scanner \
+                -c 'rm -rf -- "/workspace/$1"' sh "$path"
+            fi
+          done
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
