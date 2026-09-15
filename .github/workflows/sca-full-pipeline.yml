@@ -196,6 +196,8 @@ jobs:
     runs-on: [self-hosted, linux]
     needs: filter-by-clearing-state
     timeout-minutes: 120
+    outputs:
+      scan_required: ${{ steps.scan-needed.outputs.required }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -249,6 +251,7 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/download-artifact@v4
+        if: needs.scan-fossology.outputs.scan_required == 'true'
         with:
           name: scan-artifacts
 
