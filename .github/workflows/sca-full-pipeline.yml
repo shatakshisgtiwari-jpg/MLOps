@@ -21,7 +21,6 @@ env:
   PROJECT_VERSION: "1.0.0"
   CAPYCLI_DIR: capycli-fork
   REPORT_DIR: per-dependency-reports
-  SOURCE_DIR: sources
 
 jobs:
   generate-sbom:
@@ -30,32 +29,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-python@v5
         with:
-          node-version: "22"
+          python-version: "3.11"
 
-      - name: Install cdxgen
-        run: npm install --global @cyclonedx/cdxgen
+      - name: Checkout CapyCLI fork
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/capycli
+          ref: feat/sw360/upload_reports
+          path: ${{ env.CAPYCLI_DIR }}
+          clean: true
 
-      - name: Generate and validate CycloneDX SBOM
+      - name: Install CapyCLI
+        run: pip install . --force-reinstall
+        working-directory: ${{ env.CAPYCLI_DIR }}
+
+      - name: Generate source-aware Python SBOM
         run: |
           set -euo pipefail
-          cdxgen --recursive --output sbom.json --spec-version 1.7 --format json
+          python -m capycli getdependencies python \
+            -i requirements.txt \
+            -o sbom.json \
+            --search-meta-data \
+            -v
           test -s sbom.json
-          test "$(jq -r '.specVersion // empty' sbom.json)" = "1.7"
-          jq '
-            (.components | map(select(
-              (.group // "") != "actions" and
-              ((.name // "") | test("^actions/") | not) and
-              ((.purl // "") | startswith("pkg:github/") | not)
-            ))) as $components |
-            ($components | map(."bom-ref")) as $refs |
-            .components = $components |
-            if .dependencies then
-              .dependencies |= map(select(.ref as $ref | $refs | index($ref) != null))
-            else . end
-          ' sbom.json > sbom.json.tmp
-          mv sbom.json.tmp sbom.json
           echo "SBOM contains $(jq '.components | length' sbom.json) components"
 
       - uses: actions/upload-artifact@v4
@@ -95,20 +93,10 @@ jobs:
         run: pip install . --force-reinstall
         working-directory: ${{ env.CAPYCLI_DIR }}
 
-      - name: Resolve dependency source locations
-        run: |
-          python -m capycli bom findsources \
-            -i sbom.json \
-            -o source-resolved-sbom.json \
-            -url "${{ vars.SW360_URL }}" \
-            -t "${{ secrets.SW360_TOKEN }}" \
-            -gt "${{ github.token }}" \
-            -v
-
       - name: Map and bootstrap SW360 components
         run: |
           set +e
-          python -m capycli bom map -i source-resolved-sbom.json -url "${{ vars.SW360_URL }}" -t "${{ secrets.SW360_TOKEN }}" -mr mapping-result.json -o mapped-sbom.json --matchmode full-search,all-versions -v
+          python -m capycli bom map -i sbom.json -url "${{ vars.SW360_URL }}" -t "${{ secrets.SW360_TOKEN }}" -mr mapping-result.json -o mapped-sbom.json --matchmode full-search,all-versions -v
           result=$?
           set -e
           if [ "$result" -ne 0 ] && [ "$result" -ne 80 ] && [ "$result" -ne 81 ]; then exit "$result"; fi
