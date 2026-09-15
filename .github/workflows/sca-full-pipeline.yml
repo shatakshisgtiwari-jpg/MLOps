@@ -95,10 +95,20 @@ jobs:
         run: pip install . --force-reinstall
         working-directory: ${{ env.CAPYCLI_DIR }}
 
+      - name: Resolve dependency source locations
+        run: |
+          python -m capycli bom findsources \
+            -i sbom.json \
+            -o source-resolved-sbom.json \
+            -url "${{ vars.SW360_URL }}" \
+            -t "${{ secrets.SW360_TOKEN }}" \
+            -gt "${{ github.token }}" \
+            -v
+
       - name: Map and bootstrap SW360 components
         run: |
           set +e
-          python -m capycli bom map -i sbom.json -url "${{ vars.SW360_URL }}" -t "${{ secrets.SW360_TOKEN }}" -mr mapping-result.json -o mapped-sbom.json --matchmode full-search,all-versions -v
+          python -m capycli bom map -i source-resolved-sbom.json -url "${{ vars.SW360_URL }}" -t "${{ secrets.SW360_TOKEN }}" -mr mapping-result.json -o mapped-sbom.json --matchmode full-search,all-versions -v
           result=$?
           set -e
           if [ "$result" -ne 0 ] && [ "$result" -ne 80 ] && [ "$result" -ne 81 ]; then exit "$result"; fi
