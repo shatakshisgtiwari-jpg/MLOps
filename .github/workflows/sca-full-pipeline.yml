@@ -149,6 +149,10 @@ jobs:
         with:
           name: created-sbom
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Retain only releases requiring scans
         env:
           SW360_URL: ${{ vars.SW360_URL }}
@@ -172,13 +176,18 @@ jobs:
               )
               try:
                   with urllib.request.urlopen(request, timeout=30) as response:
-                      state = json.load(response).get("clearingState") or "UNKNOWN"
+                      release = json.load(response)
               except OSError as error:
                   raise SystemExit(f"Could not query SW360 release {release_id}: {error}")
+              reports = release.get("_embedded", {}).get("sw360:attachments", [])
+              has_report = any(
+                  report.get("attachmentType") in {"COMPONENT_LICENSE_INFO_XML", "CLEARING_REPORT"}
+                  for report in reports
+              )
               properties = [item for item in component.get("properties", []) if item.get("name") != "siemens:clearingState"]
-              properties.append({"name": "siemens:clearingState", "value": state})
+              properties.append({"name": "siemens:clearingState", "value": release.get("clearingState") or "UNKNOWN"})
               component["properties"] = properties
-              if state not in {"REPORT_AVAILABLE", "APPROVED"}:
+              if not has_report:
                   included.append(component)
           Path("enriched-sbom.json").write_text(json.dumps(sbom, indent=2) + "\n", encoding="utf-8")
           filtered = dict(sbom)
@@ -256,7 +265,6 @@ jobs:
         with:
           name: scan-artifacts
           path: |
-            results/
             ${{ env.REPORT_DIR }}/
           if-no-files-found: warn
           retention-days: 7
@@ -326,7 +334,6 @@ jobs:
           cp filtered-input/filtered-sbom.json filtered-sbom.json
           cp project-input/project-id.txt project-id.txt
           if [ "${{ needs.scan-fossology.outputs.scan_required }}" = "true" ]; then
-            cp -r scan-output/results .
             cp -r "scan-output/${{ env.REPORT_DIR }}" .
           fi
 
@@ -381,46 +388,6 @@ jobs:
           else
             cp complete-sbom.json final-sbom.json
           fi
-
-      - name: Mark scanned releases REPORT_AVAILABLE
-        env:
-          SW360_URL: ${{ vars.SW360_URL }}
-          SW360_TOKEN: ${{ secrets.SW360_TOKEN }}
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import urllib.request
-          from pathlib import Path
-
-          filtered = json.loads(Path("filtered-sbom.json").read_text(encoding="utf-8"))
-          final = json.loads(Path("final-sbom.json").read_text(encoding="utf-8"))
-          release_ids = {
-              next((item.get("value") for item in component.get("properties", []) if item.get("name") == "siemens:sw360Id"), None)
-              for component in filtered.get("components", [])
-          }
-          release_ids.discard(None)
-          for release_id in release_ids:
-              request = urllib.request.Request(
-                  f"{os.environ['SW360_URL'].rstrip('/')}/resource/api/releases/{release_id}",
-                  data=b'{"clearingState":"REPORT_AVAILABLE"}',
-                  method="PATCH",
-                  headers={
-                      "Authorization": f"Token {os.environ['SW360_TOKEN']}",
-                      "Content-Type": "application/json",
-                  },
-              )
-              with urllib.request.urlopen(request, timeout=30) as response:
-                  if response.status not in {200, 204}:
-                      raise SystemExit(f"Could not update release {release_id}")
-          for component in final.get("components", []):
-              release_id = next((item.get("value") for item in component.get("properties", []) if item.get("name") == "siemens:sw360Id"), None)
-              if release_id in release_ids:
-                  properties = [item for item in component.get("properties", []) if item.get("name") != "siemens:clearingState"]
-                  properties.append({"name": "siemens:clearingState", "value": "REPORT_AVAILABLE"})
-                  component["properties"] = properties
-          Path("final-sbom.json").write_text(json.dumps(final, indent=2) + "\n", encoding="utf-8")
-          PY
 
       - name: Publish final SBOM
         uses: actions/upload-artifact@v4
