@@ -216,6 +216,10 @@ jobs:
         with:
           name: filtered-sbom
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Determine whether scanning is required
         id: scan-needed
         run: |
@@ -225,7 +229,7 @@ jobs:
         if: steps.scan-needed.outputs.required == 'true'
         run: |
           set -euo pipefail
-          for command_name in jq docker; do command -v "$command_name" >/dev/null; done
+          for command_name in jq python docker; do command -v "$command_name" >/dev/null; done
           docker info >/dev/null
           docker image inspect fossology/fossology:scanner >/dev/null 2>&1 || docker pull fossology/fossology:scanner
 
